@@ -1,0 +1,164 @@
+(**************************************************************************)
+(*                                                                        *)
+(*    Copyright 2017 OCamlPro                                             *)
+(*                                                                        *)
+(*  All rights reserved. This file is distributed under the terms of the  *)
+(*  GNU Lesser General Public License version 2.1, with the special       *)
+(*  exception on linking described in the file LICENSE.                   *)
+(*                                                                        *)
+(**************************************************************************)
+
+open OpamTypes
+open OpamStateTypes
+open Cmdliner
+
+let get_git_url dir =
+  OpamFilename.in_dir dir @@ fun () ->
+  match OpamSystem.read_command_output ["git";"remote";"get-url";"origin"] with
+  | [url] ->
+    let u = OpamUrl.parse ~backend:`git url in
+    if OpamUrl.local_dir u <> None then None else
+      Some { u with OpamUrl.hash =
+                      OpamProcess.Job.run (OpamGit.VCS.current_branch dir) }
+  | _ -> None
+
+let lock_opam st opam =
+  let nv = OpamFile.OPAM.package opam in
+  let st =
+    { st with opams = OpamPackage.Map.add nv opam st.opams }
+  in
+  let univ =
+    OpamSwitchState.universe st
+      ~requested:(OpamPackage.Name.Set.singleton nv.name)
+      Query
+  in
+  let all_depends =
+    OpamSolver.dependencies
+      ~depopts:true ~build:true ~post:true ~installed:true
+      univ (OpamPackage.Set.singleton nv) |>
+    List.filter (fun nv1 -> nv1 <> nv)
+  in
+  let depends_formula =
+    OpamFormula.ands
+      (List.map (fun nv ->
+           Atom (nv.name, Atom
+                   (Constraint
+                      (`Eq, FString (OpamPackage.version_to_string nv)))))
+          all_depends)
+  in
+  let all_depopts =
+    OpamFormula.packages st.packages
+      (OpamFilter.filter_deps
+         ~build:true ~test:true ~doc:true ~dev:true ~default:true ~post:false
+         (OpamFile.OPAM.depopts opam))
+  in
+  let installed_depopts = OpamPackage.Set.inter all_depopts st.installed in
+  let uninstalled_depopts =
+    OpamPackage.(Name.Set.diff
+                   (names_of_packages all_depopts)
+                   (names_of_packages installed_depopts))
+  in
+  let conflicts =
+    OpamFormula.ors
+      (OpamFile.OPAM.conflicts opam ::
+       List.map (fun n -> Atom (nv.name, Empty))
+         (OpamPackage.Name.Set.elements uninstalled_depopts))
+  in
+  let pin_depends =
+    OpamStd.List.filter_map (fun nv ->
+        if not (OpamSwitchState.is_pinned st nv.name) then None else
+        match OpamSwitchState.primary_url st nv with
+        | None -> None
+        | Some u ->
+          match OpamUrl.local_dir u with
+          | Some d ->
+            let err () =
+              OpamConsole.warning "Dependency %s is pinned to local target %s"
+                (OpamPackage.to_string nv) (OpamUrl.to_string u);
+              None
+            in
+            if u.OpamUrl.backend = `git then
+              match get_git_url d with
+              | Some resolved_u ->
+                OpamConsole.note "Local pin %s resolved to %s"
+                  (OpamUrl.to_string u) (OpamUrl.to_string resolved_u);
+                Some (nv, resolved_u)
+              | None -> err ()
+            else err ()
+          | None -> Some (nv, u))
+      all_depends
+  in
+  opam |>
+  OpamFile.OPAM.with_depopts OpamFormula.Empty |>
+  OpamFile.OPAM.with_depends depends_formula |>
+  OpamFile.OPAM.with_conflicts conflicts |>
+  OpamFile.OPAM.with_pin_depends pin_depends
+
+let lock_command switch files =
+  let switch =
+    OpamStd.Option.map OpamSwitch.of_string switch
+  in
+  let files =
+    List.fold_left (fun acc f ->
+        if Sys.is_directory f then
+          let d = OpamFilename.Dir.of_string f in
+          let fs = List.map snd (OpamPinned.files_in_source d) in
+          if fs = [] then
+            OpamConsole.error_and_exit `Bad_arguments
+              "No package definition files found at %s"
+              OpamFilename.Dir.(to_string d);
+          List.rev_append fs acc
+        else OpamFile.make (OpamFilename.of_string f) :: acc)
+      [] files
+    |> List.rev
+  in
+  let opams =
+    List.map (fun f -> f, OpamFile.OPAM.read f) files
+  in
+  let gt = OpamGlobalState.load `Lock_none in
+  OpamSwitchState.with_ `Lock_none ?switch gt @@ fun st ->
+  List.iter (fun (f, opam) ->
+      let locked = lock_opam st opam in
+      let locked_file =
+        OpamFile.(make (OpamFilename.add_extension (filename f) "locked"))
+      in
+      OpamFile.OPAM.write_with_preserved_format ~format_from:f locked_file locked;
+      OpamConsole.msg "Wrote %s\n" (OpamFile.to_string locked_file))
+    opams
+
+let switch_arg =
+  Arg.(value & opt (some string) None & info ["switch"] ~docv:"SWITCH" ~doc:
+         "Select the opam switch to use to determine the versions to lock")
+
+let opamfile_arg =
+  Arg.(value & pos_all file ["."] & info [] ~docv:"FILE" ~doc:
+         "Select opam files to rewrite. the output will be put in \
+          $(i,FILE).locked. If a directory is specified, all package \
+          definitions in this directory will be processed.")
+
+let man = [
+  `S "DESCRIPTION";
+  `P "This utility reads opam package definitions files, checks the current \
+      state of their installed dependencies, and outputs modified versions of \
+      the files with a $(i,.locked) suffix, where all the (transitive) \
+      dependencies and pinnings have been bound strictly to the currently \
+      installed version.";
+  `P "By using these locked opam files, it is then possible to recover the \
+      precise build environment that was setup when they were generated."
+]
+
+let lock_command =
+  Term.(pure lock_command $ switch_arg $ opamfile_arg),
+  Term.info "opam-lock" ~man ~doc:
+    "Create locked opam files to share build environments across hosts."
+
+let () =
+  OpamSystem.init ();
+  let root = OpamStateConfig.opamroot () in
+  ignore (OpamStateConfig.load_defaults root);
+  OpamFormatConfig.init ();
+  OpamStd.Config.init ~safe_mode:true ();
+  OpamRepositoryConfig.init ();
+  OpamSolverConfig.init ();
+  OpamStateConfig.init ();
+  ignore @@ Term.eval lock_command
