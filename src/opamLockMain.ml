@@ -102,18 +102,23 @@ let lock_command switch files =
     List.fold_left (fun acc f ->
         if Sys.is_directory f then
           let d = OpamFilename.Dir.of_string f in
-          let fs = List.map snd (OpamPinned.files_in_source d) in
+          let fs = OpamPinned.files_in_source d in
           if fs = [] then
             OpamConsole.error_and_exit `Bad_arguments
               "No package definition files found at %s"
               OpamFilename.Dir.(to_string d);
           List.rev_append fs acc
-        else OpamFile.make (OpamFilename.of_string f) :: acc)
+        else (None, OpamFile.make (OpamFilename.of_string f)) :: acc)
       [] files
     |> List.rev
   in
   let opams =
-    List.map (fun f -> f, OpamFile.OPAM.read f) files
+    List.map (fun (nameopt, f) ->
+        let opam = OpamFile.OPAM.read f in
+        f, match nameopt with
+        | None -> opam
+        | Some n -> OpamFile.OPAM.with_name n opam)
+      files
   in
   let gt = OpamGlobalState.load `Lock_none in
   OpamSwitchState.with_ `Lock_none ?switch gt @@ fun st ->
