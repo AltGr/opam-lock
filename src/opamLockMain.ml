@@ -22,7 +22,7 @@ let get_git_url dir =
                       OpamProcess.Job.run (OpamGit.VCS.current_branch dir) }
   | _ -> None
 
-let lock_opam st opam =
+let lock_opam ?(only_direct=false) st opam =
   let nv = OpamFile.OPAM.package opam in
   let st =
     { st with opams = OpamPackage.Map.add nv opam st.opams }
@@ -38,9 +38,20 @@ let lock_opam st opam =
       univ (OpamPackage.Set.singleton nv) |>
     List.filter (fun nv1 -> nv1 <> nv)
   in
+  let all_depends =
+    if only_direct then
+      let names =
+        OpamFilter.filter_formula ~default:true (fun _ -> None)
+          (OpamFile.OPAM.depends opam) |>
+        OpamFormula.fold_left (fun acc (n,_) -> OpamPackage.Name.Set.add n acc)
+          OpamPackage.Name.Set.empty
+      in
+      List.filter (fun nv -> OpamPackage.Name.Set.mem nv.name names) all_depends
+    else all_depends
+  in
   let depends_formula =
     OpamFormula.ands
-      (List.map (fun nv ->
+      (List.rev_map (fun nv ->
            Atom (nv.name, Atom
                    (Constraint
                       (`Eq, FString (OpamPackage.version_to_string nv)))))
@@ -94,7 +105,7 @@ let lock_opam st opam =
   OpamFile.OPAM.with_conflicts conflicts |>
   OpamFile.OPAM.with_pin_depends pin_depends
 
-let lock_command switch files =
+let lock_command only_direct switch files =
   let switch =
     OpamStd.Option.map OpamSwitch.of_string switch
   in
@@ -123,13 +134,17 @@ let lock_command switch files =
   let gt = OpamGlobalState.load `Lock_none in
   OpamSwitchState.with_ `Lock_none ?switch gt @@ fun st ->
   List.iter (fun (f, opam) ->
-      let locked = lock_opam st opam in
+      let locked = lock_opam ~only_direct st opam in
       let locked_file =
         OpamFile.(make (OpamFilename.add_extension (filename f) "locked"))
       in
       OpamFile.OPAM.write_with_preserved_format ~format_from:f locked_file locked;
       OpamConsole.msg "Wrote %s\n" (OpamFile.to_string locked_file))
     opams
+
+let only_direct_flag =
+  Arg.(value & flag & info ["direct-only"; "d"] ~doc:
+         "Only lock direct dependencies, rather than the whole dependency tree")
 
 let switch_arg =
   Arg.(value & opt (some string) None & info ["switch"] ~docv:"SWITCH" ~doc:
@@ -153,7 +168,7 @@ let man = [
 ]
 
 let lock_command =
-  Term.(pure lock_command $ switch_arg $ opamfile_arg),
+  Term.(pure lock_command $ only_direct_flag $ switch_arg $ opamfile_arg),
   Term.info "opam-lock" ~man ~doc:
     "Create locked opam files to share build environments across hosts."
 

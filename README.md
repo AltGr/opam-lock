@@ -12,4 +12,11 @@ You can then use `opam install <name>.opam.locked` to get the package installed
 with the precise dependencies, including transitive dependencies, that it had in
 the original system.
 
+Option `--direct-only` can be used to only lock direct dependency versions
+rather than the whole tree.
+
+Note that the locked opam file adds _conflicts_ to uninstalled optional
+dependencies, but not recursively: it therefore guarantees the same dependencies
+get installed, up to potentially some of their optional dependencies.
+
 This project is currently in early beta.
