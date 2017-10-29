@@ -38,7 +38,7 @@ let lock_opam ?(only_direct=false) st opam =
       univ (OpamPackage.Set.singleton nv) |>
     List.filter (fun nv1 -> nv1 <> nv)
   in
-  let all_depends =
+  let depends =
     if only_direct then
       let names =
         OpamFilter.filter_formula ~default:true (fun _ -> None)
@@ -55,7 +55,7 @@ let lock_opam ?(only_direct=false) st opam =
            Atom (nv.name, Atom
                    (Constraint
                       (`Eq, FString (OpamPackage.version_to_string nv)))))
-          all_depends)
+          depends)
   in
   let all_depopts =
     OpamFormula.packages st.packages
