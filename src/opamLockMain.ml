@@ -23,6 +23,7 @@ let get_git_url dir =
   | _ -> None
 
 let lock_opam ?(only_direct=false) st opam =
+  let opam = OpamFormatUpgrade.opam_file opam in
   let nv = OpamFile.OPAM.package opam in
   let st =
     { st with opams = OpamPackage.Map.add nv opam st.opams }
