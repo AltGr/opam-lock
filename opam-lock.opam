@@ -12,3 +12,4 @@ depends: [
   "opam-state" {>= "2.0.0~beta5"}
 ]
 build: ["jbuilder" "build" "-p" name]
+flags: plugin
