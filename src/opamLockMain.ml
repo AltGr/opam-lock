@@ -50,6 +50,7 @@ let lock_opam ?(only_direct=false) st opam =
       List.filter (fun nv -> OpamPackage.Name.Set.mem nv.name names) all_depends
     else all_depends
   in
+  let depends = List.sort (fun a b -> compare b.name a.name) depends in
   let depends_formula =
     OpamFormula.ands
       (List.rev_map (fun nv ->
