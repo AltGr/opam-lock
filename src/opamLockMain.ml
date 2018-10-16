@@ -37,7 +37,8 @@ let lock_opam ?(only_direct=false) st opam =
     OpamSolver.dependencies
       ~depopts:true ~build:true ~post:true ~installed:true
       univ (OpamPackage.Set.singleton nv) |>
-    List.filter (fun nv1 -> nv1 <> nv)
+    List.filter (fun nv1 -> nv1 <> nv) |>
+    List.fast_sort (fun nv nv' -> compare nv.name nv'.name)
   in
   let depends =
     if only_direct then
