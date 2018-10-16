@@ -1,5 +1,5 @@
 opam-version: "2.0"
-version: "0.1"
+version: "0.2"
 synopsis: "Locking of development package definition dependency versions"
 maintainer: "Louis Gesbert <louis.gesbert@ocamlpro.com>"
 authors: "Louis Gesbert <louis.gesbert@ocamlpro.com>"
