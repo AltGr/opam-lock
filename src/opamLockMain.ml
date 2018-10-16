@@ -120,16 +120,28 @@ let lock_command only_direct switch files =
               "No package definition files found at %s"
               OpamFilename.Dir.(to_string d);
           List.rev_append fs acc
-        else (None, OpamFile.make (OpamFilename.of_string f)) :: acc)
+        else
+          let file = OpamFilename.of_string f in
+          (OpamPinned.name_of_opam_filename (OpamFilename.dirname file) file,
+            OpamFile.make file) :: acc)
       [] files
     |> List.rev
   in
   let opams =
     List.map (fun (nameopt, f) ->
         let opam = OpamFile.OPAM.read f in
-        f, match nameopt with
-        | None -> opam
-        | Some n -> OpamFile.OPAM.with_name n opam)
+        let opam =
+          match nameopt with
+          | None -> opam
+          | Some n -> OpamFile.OPAM.with_name n opam
+        in
+        let opam =
+          match OpamFile.OPAM.version_opt opam with
+          | None ->
+            OpamFile.OPAM.with_version (OpamPackage.Version.of_string "dev") opam
+          | Some version -> opam
+        in
+        f,opam)
       files
   in
   let gt = OpamGlobalState.load `Lock_none in
