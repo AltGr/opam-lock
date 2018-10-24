@@ -12,15 +12,46 @@ open OpamTypes
 open OpamStateTypes
 open Cmdliner
 
-let get_git_url dir =
+let get_git_url url nv dir =
   OpamFilename.in_dir dir @@ fun () ->
-  match OpamSystem.read_command_output ["git";"remote";"get-url";"origin"] with
-  | [url] ->
-    let u = OpamUrl.parse ~backend:`git url in
-    if OpamUrl.local_dir u <> None then None else
-      Some { u with OpamUrl.hash =
-                      OpamProcess.Job.run (OpamGit.VCS.current_branch dir) }
-  | _ -> None
+  try
+    match OpamSystem.read_command_output ["git";"remote";"get-url";"origin"] with
+    | [url0] ->
+      let u = OpamUrl.parse ~backend:`git url0 in
+      if OpamUrl.local_dir u <> None then None else
+        let hash =
+          match url.OpamUrl.hash with
+          | None ->
+            OpamProcess.Job.run (OpamGit.VCS.current_branch dir)
+          | Some hash ->
+            match OpamSystem.read_command_output
+                    ["git"; "branch"; "-r"; "--contains"; hash] with
+            | _::_ -> Some hash
+            | [] ->
+              (let b_default =
+                 match List.map (fun x -> OpamStd.String.split x '/')
+                         (OpamSystem.read_command_output
+                            ["git"; "symbolic-re"; "refs/remotes/origin/HEAD"]) with
+                 | [_::_::_::b::[]] -> Some b
+                 | _ -> None
+               in
+               OpamConsole.warning
+                 "Referenced git branch for %s is not available in remote: %s.%s"
+                 (OpamConsole.colorise `underline (OpamPackage.to_string nv))
+                 (OpamUrl.to_string u)
+                 (OpamStd.Option.to_string
+                    (fun b ->
+                       Printf.sprintf "\nReplace it by default remote branch %s."
+                         (OpamConsole.colorise `underline b))
+                    b_default);
+               b_default)
+        in
+        Some { u with OpamUrl.hash = hash }
+    | _ -> None
+  with OpamSystem.Command_not_found _ | OpamSystem.Process_error _ ->
+    (OpamConsole.error "Can't retrieve remote informations for %s"
+       (OpamPackage.to_string nv);
+     None)
 
 let lock_opam ?(only_direct=false) st opam =
   let opam = OpamFormatUpgrade.opam_file opam in
@@ -91,7 +122,7 @@ let lock_opam ?(only_direct=false) st opam =
               None
             in
             if u.OpamUrl.backend = `git then
-              match get_git_url d with
+              match get_git_url u nv d with
               | Some resolved_u ->
                 OpamConsole.note "Local pin %s resolved to %s"
                   (OpamUrl.to_string u) (OpamUrl.to_string resolved_u);
