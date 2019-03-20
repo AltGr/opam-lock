@@ -1,3 +1,12 @@
+# Frozen repository
+
+This repository contains the `opam-lock` plugin, which is deprecated,since the
+feature has been integrated in opam.
+
+See [this opam PR](https://github.com/ocaml/opam/issues/3734) for details.
+
+No new pull requests will be accepted; please see the [opam](https://github.com/ocaml/opam) tracker for any issues or feature requests.
+
 # opam-lock: restrict opam file to describe a precise build environment
 
 This small opam plugin can rewrite opam package definition files to emulate the
